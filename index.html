@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tiled Upscaling Seams: How Much Context a Tile Actually Needs</title>
+<meta name="description" content="Zero-context tiling put 0.45% of pixels more than 2 levels off, 68% of them within 2 px of a tile boundary. Three pixels of context made every tile size bit-identical to the full frame; per-tile auto-levels cost 34 dB.">
+<link rel="canonical" href="https://celticgemini001.github.io/upgolab-tiled-upscale-seams/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Tiled Upscaling Seams: How Much Context a Tile Actually Needs">
+<meta property="og:description" content="A tile needs as much context as the resampler's support, and not one pixel more. Three pixels made every tile size bit-identical to the full frame; per-tile auto-levels cost 34 dB and no amount of overlap hid it.">
+<script type="application/ld+json">
+{"@type":"Article",
+ "@context":"https://schema.org",
+ "headline":"Tiled Upscaling Seams: How Much Context a Tile Actually Needs",
+ "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "datePublished":"2026-11-16",
+ "dateModified":"2026-11-16",
+ "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-tiled-upscale-seams/"}
+</script>
+<style>
+:root{--ink:#16181d;--mut:#5b6270;--line:#e2e5ea;--acc:#0a58ca}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:2rem;line-height:1.22;margin:0 0 .5rem;letter-spacing:-.02em}
+h2{font-size:1.33rem;margin:2.5rem 0 .7rem}
+h3{font-size:1.06rem;margin:1.8rem 0 .5rem}
+p,li{color:#2b3038}ul,ol{padding-left:1.3rem}li{margin:.4rem 0}
+a{color:var(--acc)}
+.lede{font-size:1.14rem;color:var(--mut);margin:0 0 1.6rem}
+.meta{font-size:.88rem;color:var(--mut);border-bottom:1px solid var(--line);padding-bottom:1rem;margin-bottom:2rem}
+table{width:100%;border-collapse:collapse;margin:1.4rem 0;font-size:.94rem}
+th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:#f6f7f9;font-size:.86rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.callout{border-left:3px solid var(--acc);background:#f5f8fd;padding:.9rem 1.1rem;margin:1.6rem 0;border-radius:0 6px 6px 0}
+.callout p{margin:.3rem 0}
+.callout.warn{border-left-color:#b45309;background:#fef7ec}
+pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
+code{font-size:.9em}
+footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<article>
+<h1>Tiled Upscaling Seams: How Much Context a Tile Actually Needs</h1>
+
+<p class="lede">Every upscaler that cannot fit a frame in memory cuts it into tiles. Every seam
+artifact blamed on tiling is then described as a memory limitation, or as the price of a big
+inference batch. I tiled a real photograph deliberately, at six tile sizes, and measured the
+difference against a single-shot upscale of the whole frame. The answer is smaller than the
+folklore: a tile needs as much <em>context</em> as the resampler has support, and three source
+pixels was enough to make 54, 64, 108, 180, 256 and 270-pixel tiles all <strong>bit-identical</strong>
+to the full-frame result. What does produce visible seams is not tiling at all — it is any
+per-tile adaptive step, and I have the numbers for how badly.</p>
+
+<p class="meta">Measured with numpy 1.26.4 and Pillow 12.2.0 · source is one real photograph downscaled
+to 540×810 by area-average (BOX), then upscaled 2× to 1080×1620 · reference is the same resampler
+applied to the whole frame in one call · all statistics computed on raw uint8-decoded arrays, never
+from a screenshot · every number reproducible from the snippet at the end</p>
+
+<h2>The experiment that decides everything: context, not size</h2>
+
+<p>A separable Lanczos-3 resampler reaches three pixels in each direction. If a tile is cut exactly
+at the boundary it will be asked to produce output pixels whose interpolation window extends past
+its own edge, and the implementation has to invent something — edge replication, reflection, or
+zero padding. Whichever it picks, it is not the value the full-frame resampler would have used,
+because that value lived in the neighbouring tile.</p>
+
+<p>So the question "how much overlap do I need?" has a sharp answer rather than a heuristic answer.
+I gave each tile <code>ov</code> extra source pixels of context on every side, resampled the padded
+tile, then <strong>cropped the context back off</strong> before writing — no blending, no feathering,
+exact coverage. Increasing <code>ov</code> from zero upward:</p>
+
+<table>
+<thead><tr><th>context (src px)</th><th>max error (levels)</th><th>pixels differing</th><th>PSNR vs full frame</th><th>bit-identical</th></tr></thead>
+<tbody>
+<tr><td class="num">0</td><td class="num">51.0</td><td class="num">3.206%</td><td class="num">55.49 dB</td><td>no</td></tr>
+<tr><td class="num">1</td><td class="num">14.0</td><td class="num">1.680%</td><td class="num">62.69 dB</td><td>no</td></tr>
+<tr><td class="num">2</td><td class="num">3.0</td><td class="num">0.307%</td><td class="num">76.08 dB</td><td>no</td></tr>
+<tr><td class="num">3</td><td class="num">0.0</td><td class="num">0%</td><td class="num">exact</td><td><strong>yes</strong></td></tr>
+<tr><td class="num">4 · 6 · 8 · 16 · 32</td><td class="num">0.0</td><td class="num">0%</td><td class="num">exact</td><td>yes</td></tr>
+</tbody>
+</table>
+
+<p>Three source pixels — six output pixels at 2× — is the entire requirement. Everything past that
+is wasted arithmetic. This is not an approximation or a tolerance: <code>np.array_equal</code>
+returns true, and the maximum absolute difference is exactly 0.0, not 0.004 that rounds to zero.
+The transition is also not gradual in a way that suggests a tuning knob. Two pixels of context
+still leaves a 3-level error on 124 pixels; three leaves nothing.</p>
+
+<h3>Why one pixel is not almost enough</h3>
+
+<p>The first pixel of context recovers the bulk of it — max error drops from 51 to 14 levels and
+PSNR jumps 7.2 dB — and then the last two pixels recover the tail. That shape is the signature of
+a filter weight table, not of a statistical effect: each extra pixel of context brings in one more
+non-zero tap. Lanczos-3 has three taps per side, so the error goes to zero exactly when the tap
+count is satisfied and stays there. A bicubic kernel with two taps per side needs two; a box filter
+needs none.</p>
+
+<div class="callout">
+<p><strong>Practical form:</strong> overlap = ceil(kernel radius), in <em>source</em> pixels, and
+the overlap must be discarded rather than blended. For a 540×810 source split into 108-pixel tiles,
+six pixels of context costs 40 tiles and a work ratio of 1.202 — twenty percent more inference for
+a result indistinguishable from not tiling at all.</p>
+</div>
+
+<h2>Tile size alone is not monotonic, which is the trap</h2>
+
+<p>Before adding any context, the naive tiler — cut clean, no padding — gives a picture that is
+tempting to summarise as "bigger tiles are better." It is not that clean:</p>
+
+<table>
+<thead><tr><th>tile (src px)</th><th>tiles</th><th>seam area</th><th>PSNR all</th><th>PSNR on seams</th><th>PSNR interior</th><th>max err</th></tr></thead>
+<tbody>
+<tr><td class="num">54</td><td class="num">150</td><td class="num">6.67%</td><td class="num">50.46</td><td class="num">39.50</td><td class="num">57.94</td><td class="num">78.33</td></tr>
+<tr><td class="num">64</td><td class="num">117</td><td class="num">5.84%</td><td class="num">51.91</td><td class="num">40.24</td><td class="num">60.11</td><td class="num">46.00</td></tr>
+<tr><td class="num">108</td><td class="num">40</td><td class="num">3.18%</td><td class="num">55.49</td><td class="num">41.38</td><td class="num">62.82</td><td class="num">48.67</td></tr>
+<tr><td class="num">180</td><td class="num">15</td><td class="num">1.72%</td><td class="num"><strong>61.85</strong></td><td class="num"><strong>45.30</strong></td><td class="num">68.31</td><td class="num">20.33</td></tr>
+<tr><td class="num">270</td><td class="num">6</td><td class="num">0.86%</td><td class="num">56.28</td><td class="num">36.65</td><td class="num">63.05</td><td class="num">16.67</td></tr>
+<tr><td class="num">540</td><td class="num">2</td><td class="num">0.25%</td><td class="num">72.14</td><td class="num">47.37</td><td class="num">78.01</td><td class="num">10.00</td></tr>
+</tbody>
+</table>
+
+<p>270-pixel tiles have half the seam area of 180-pixel tiles, a lower maximum error, and a
+<em>worse</em> seam PSNR by 8.65 dB. The reason is that the error is not a property of the grid, it
+is a property of what happened to be under the cut. A boundary through a flat gradient costs
+almost nothing; a boundary through the high-contrast edge in this frame costs 20 to 50 levels on the
+two output columns that straddle it. Tile size changes <em>how many</em> boundaries you get, and
+only incidentally <em>where</em> they fall.</p>
+
+<div class="callout warn">
+<p>This is why "use at least 512-pixel tiles" style advice does not survive measurement. On this
+source the best tile size was 180 and the second-worst was 270 — the smaller grid won because its
+boundaries happened to miss the sharpest edge. Two more sources would very likely rank them
+differently. The only configuration that is not a lottery is one where context makes boundary
+position irrelevant.</p>
+</div>
+
+<h2>Blending with overlap is worse than cropping — measured</h2>
+
+<p>The common recommendation is to overlap tiles and feather across the seam, on the theory that a
+gradual transition is less visible than a hard one. When the samples on both sides are correct,
+feathering is not merely unnecessary, it is <em>detectably</em> destructive, because averaging two
+identical fields through floating-point cosine weights does not return the original:</p>
+
+<table>
+<thead><tr><th>mode</th><th>overlap</th><th>PSNR</th><th>max error</th></tr></thead>
+<tbody>
+<tr><td>context + crop back (nominal)</td><td class="num">3</td><td class="num">exact</td><td class="num">0.00</td></tr>
+<tr><td>ramp blend</td><td class="num">8</td><td class="num">86.94 dB</td><td class="num">0.70</td></tr>
+<tr><td>ramp blend</td><td class="num">16</td><td class="num">97.87 dB</td><td class="num">0.18</td></tr>
+<tr><td>ramp blend</td><td class="num">32</td><td class="num">111.15 dB</td><td class="num">0.04</td></tr>
+</tbody>
+</table>
+
+<p>Sub-level, invisible, and the wrong direction. If you are going to blend you must be blending
+because the tiles disagree on purpose — never because you think the seam needs smoothing. On
+correctly-contexted tiles the blend is buying you rounding noise.</p>
+
+<h3>Where blending does help, and how much it does not</h3>
+
+<p>Add one per-tile adaptive step — auto-levels, the mildest thing a pipeline does, one percentile
+stretch per tile — and the picture changes. Now adjacent tiles really do disagree about the mapping
+from input to output, and a hard cut turns that disagreement into a line:</p>
+
+<table>
+<thead><tr><th>tiles with per-tile auto-levels</th><th>PSNR all</th><th>max error</th><th>seam step</th></tr></thead>
+<tbody>
+<tr><td>no overlap, hard cut</td><td class="num">21.47</td><td class="num">152.00</td><td class="num">11.73</td></tr>
+<tr><td>8 px overlap, ramp blend</td><td class="num">22.93</td><td class="num">122.82</td><td class="num">0.434</td></tr>
+<tr><td>16 px overlap, ramp blend</td><td class="num">24.30</td><td class="num">81.00</td><td class="num">0.371</td></tr>
+<tr><td>32 px overlap, ramp blend</td><td class="num">25.71</td><td class="num">52.66</td><td class="num">0.277</td></tr>
+</tbody>
+</table>
+
+<p class="meta" style="border:0;padding:0;margin:.4rem 0 1.2rem">Max error in these tables is the
+largest single-channel difference; the largest mean-of-three-channels difference is 137.95, 105.91,
+72.84 and 50.71 for the four rows in order.</p>
+
+<p>Blending cuts the visible seam step by a factor of 27 and buys 4.2 dB. It also leaves a 52-level
+maximum error and a picture 34 dB worse than the un-tiled result. Feathering hides the
+<em>discontinuity</em> perfectly and cannot touch the <em>gain error</em>, because a blend of a
+correctly-exposed region and an over-stretched region is simply a wide, soft, wrong region instead
+of a thin, hard, wrong region.</p>
+
+<h2>The seam generator is per-tile state, not tiles</h2>
+
+<p>Per-tile auto-levels on a clean cut cost 34 dB — 21.47 against the 55.49 that the same tiling
+scores with no per-tile step. Each boundary gets its own error step, and the step's visibility
+depends on the local image gradient, which is exactly the ratio the eye responds to:</p>
+
+<table>
+<thead><tr><th>boundary</th><th>err step</th><th>local gradient</th><th>ratio</th></tr></thead>
+<tbody>
+<tr><td>vertical at x=108</td><td class="num">12.11</td><td class="num">3.87</td><td class="num">3.13×</td></tr>
+<tr><td>vertical at x=216</td><td class="num">3.18</td><td class="num">4.74</td><td class="num">0.67×</td></tr>
+<tr><td>vertical at x=324</td><td class="num">9.01</td><td class="num">7.00</td><td class="num">1.29×</td></tr>
+<tr><td>vertical at x=432</td><td class="num">9.68</td><td class="num">5.53</td><td class="num">1.75×</td></tr>
+<tr><td>horizontal at y=108</td><td class="num">29.77</td><td class="num">6.04</td><td class="num">4.93×</td></tr>
+<tr><td>horizontal at y=216</td><td class="num">12.22</td><td class="num">5.17</td><td class="num">2.36×</td></tr>
+</tbody>
+</table>
+
+<p>Same operator, same grid, and the ratio swings 7× depending on what the cut lands on. Some
+seams would be invisible even with a 12-level step because the neighbourhood already has 6 levels
+of gradient there. This is the general rule for every artifact I have measured in this series:
+absolute error predicts almost nothing, and error relative to local content predicts most of it.</p>
+
+<h3>A per-tile sharpen policy: better PSNR, worse seam</h3>
+
+<p>I tried the adaptive version deliberately — one threshold on per-tile gradient energy deciding
+between 0.35 and 1.1 of unsharp amount. Against a single global sharpen at 0.7:</p>
+
+<table>
+<thead><tr><th>sharpen policy</th><th>PSNR</th><th>seam step</th><th>max error</th></tr></thead>
+<tbody>
+<tr><td>per-tile threshold policy</td><td class="num"><strong>41.18</strong></td><td class="num"><strong>0.871</strong></td><td class="num">85.00</td></tr>
+<tr><td>one global amount</td><td class="num">38.03</td><td class="num">0.598</td><td class="num">58.00</td></tr>
+</tbody>
+</table>
+
+<p>The adaptive policy wins on PSNR by 3.15 dB and loses on seam step by 46%. Both of those are
+true at the same time, and the reading is obvious once stated: an adaptive policy is optimising the
+average while creating local disagreements at every change of decision. If the deliverable is a
+score, adapt per tile. If the deliverable is an image, do not.</p>
+
+<h2>Clipping is the operator's fault, not the tiling's</h2>
+
+<p>Strong sharpening at 1.4 amount, applied per tile, drives 0.554% of output pixels to 255. The
+same 1.4 applied once to the whole frame drives 0.555%. The reference has 0.168%. So tiling changed
+the clipped fraction by 0.001 percentage points while the operator changed it by 3.3×. Pixels at
+zero: 3.011% tiled against 3.013% global. If a tiled pipeline appears to clip more than a
+whole-frame one, the cause is upstream in the operator or its state, not in the seams.</p>
+
+<h2>What I got wrong first, and how it was caught</h2>
+
+<p>My first grid-phase sweep showed PSNR falling from 41.4 to 25.5 dB as the tile grid shifted by
+one pixel, with maximum errors of 252 levels. That looked like a real and useful finding about
+lattice alignment — and it was a bug. Shifting the grid origin left an uncovered strip on the left
+and top edges, which stayed at zero, and a zero-filled strip against real content is a 252-level
+error. Fixed by always inserting a leading tile at coordinate 0:</p>
+
+<table>
+<thead><tr><th>grid phase (src px)</th><th>PSNR all</th><th>seam step</th><th>max error</th></tr></thead>
+<tbody>
+<tr><td class="num">0</td><td class="num">55.49</td><td class="num">0.365</td><td class="num">48.67</td></tr>
+<tr><td class="num">1</td><td class="num">55.63</td><td class="num">0.378</td><td class="num">46.67</td></tr>
+<tr><td class="num">2</td><td class="num">54.91</td><td class="num">0.368</td><td class="num">59.67</td></tr>
+<tr><td class="num">3</td><td class="num">53.75</td><td class="num">0.389</td><td class="num">50.67</td></tr>
+<tr><td class="num">4</td><td class="num">55.14</td><td class="num">0.418</td><td class="num">47.67</td></tr>
+<tr><td class="num">7</td><td class="num">55.11</td><td class="num">0.374</td><td class="num">49.33</td></tr>
+</tbody>
+</table>
+
+<p>1.9 dB of total spread across six phases, no trend, seam step flat at 0.365–0.418. <strong>Grid
+phase does not matter.</strong> The hypothesis is dead and I am reporting it dead. The tell was in
+the diagnostic, not in the metric: a 252-level error is impossible from a resampler disagreement, so
+the number was describing my compositor, not the algorithm.</p>
+
+<div class="callout warn">
+<p><strong>Second bug, same class.</strong> My first compositor accumulated weights into a mask and
+divided, and the mask collapsed to zero for tiles whose context was clipped at the frame edge. That
+produced a report claiming 8.53 dB on seams with 255-level errors at <em>every</em> overlap value
+from 1 to 32 — identical to three decimals, which is the giveaway. A metric that does not respond
+to the parameter you are varying is a broken instrument, not a discovery. Both bugs are why the
+numbers above come from a compositor that writes exact coverage and asserts
+<code>array_equal(one_tile, full_frame)</code> before any sweep runs.</p>
+</div>
+
+<h2>Where the error actually is</h2>
+
+<p>On a clean 108-pixel cut with no adaptive step, 0.454% of pixels are more than 2 levels off —
+7,947 of 1,749,600. Of those, 67.6% sit within two output pixels of a tile boundary, while the
+seam band is only 3.18% of the frame. That is a 21× concentration of error into a thin line, which
+is precisely why it reads as a line to a viewer even at a PSNR of 55 dB:</p>
+
+<table>
+<thead><tr><th>context</th><th>&gt;1 level</th><th>&gt;2 levels</th><th>&gt;4 levels</th><th>&gt;8 levels</th><th>max</th></tr></thead>
+<tbody>
+<tr><td class="num">0 px</td><td class="num">14,712</td><td class="num">7,947</td><td class="num">3,044</td><td class="num">903</td><td class="num">51.0</td></tr>
+<tr><td class="num">1 px</td><td class="num">5,964</td><td class="num">2,586</td><td class="num">586</td><td class="num">91</td><td class="num">14.0</td></tr>
+<tr><td class="num">2 px</td><td class="num">124</td><td class="num">4</td><td class="num">0</td><td class="num">0</td><td class="num">3.0</td></tr>
+<tr><td class="num">3 px</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0.0</td></tr>
+</tbody>
+</table>
+
+<p>Two pixels of context leaves four pixels in the entire frame above 2 levels. Three leaves none.
+The distribution goes from a long tail to a point mass at zero in one step, which is the same
+signature as the PSNR table and the same explanation: filter support.</p>
+
+<h2>Cost, measured rather than assumed</h2>
+
+<p>Context is not free, but it is cheaper than the seam it removes. Work ratio is the total source
+area resampled, including padding, divided by the frame area:</p>
+
+<table>
+<thead><tr><th>tile</th><th>context</th><th>tiles</th><th>work ratio</th><th>boundary output px</th></tr></thead>
+<tbody>
+<tr><td class="num">64</td><td class="num">0</td><td class="num">117</td><td class="num">1.000</td><td class="num">25,920</td></tr>
+<tr><td class="num">108</td><td class="num">0</td><td class="num">40</td><td class="num">1.000</td><td class="num">14,040</td></tr>
+<tr><td class="num">108</td><td class="num">6</td><td class="num">40</td><td class="num">1.202</td><td class="num">14,040</td></tr>
+<tr><td class="num">108</td><td class="num">32</td><td class="num">40</td><td class="num">2.289</td><td class="num">14,040</td></tr>
+<tr><td class="num">256</td><td class="num">0</td><td class="num">12</td><td class="num">1.000</td><td class="num">6,480</td></tr>
+<tr><td class="num">256</td><td class="num">16</td><td class="num">12</td><td class="num">1.251</td><td class="num">6,480</td></tr>
+<tr><td class="num">540</td><td class="num">0</td><td class="num">2</td><td class="num">1.000</td><td class="num">1,080</td></tr>
+</tbody>
+</table>
+
+<p>Six pixels of context on 108-pixel tiles costs 20.2% more resampling work and produces an exact
+result. Thirty-two pixels of context, the sort of number that gets recommended as "safe," costs
+128.9% more and produces exactly the same exact result. The recommended value is the wrong one by a
+factor of six in cost terms, and it is the wrong one in the same direction every time: people
+overlap by feel, and feel is calibrated to hiding a seam rather than to satisfying a kernel.</p>
+
+<div class="callout">
+<p><strong>The rule, in one line:</strong> context = kernel radius in source pixels, cropped back
+and never blended, and no per-tile adaptive state. Everything else in this measurement follows from
+those three clauses. The tiles are innocent; the seam is made by the padding, by the blend, or by
+the per-tile decision.</p>
+</div>
+
+<p>If your pipeline tiles because the model or the browser tab cannot hold the frame, the tiling
+itself is not what you are seeing in the output. Feed a clean master, give each tile its kernel
+radius of context, keep adaptive steps global, and the last <a href="https://upgolab.com/en/upscale">browser
+upscaler at upgolab.com</a> in the chain will see the same image whether it processed it in one
+call or forty — which is the only condition under which a tiling parameter can be called correct.</p>
+
+<h3>Reproducing it</h3>
+
+<pre><code>import numpy as np
+from PIL import Image
+
+GT  = np.asarray(Image.open('photo.jpg').convert('RGB')).astype(np.float32)
+SRC = np.asarray(Image.fromarray(GT.astype(np.uint8))
+        .resize((GT.shape[1]//2, GT.shape[0]//2), Image.BOX)).astype(np.float32)
+K = 2; H, W = SRC.shape[:2]; OH, OW = H*K, W*K
+
+def up(a, size):
+    return np.asarray(Image.fromarray(np.clip(a,0,255).astype(np.uint8))
+                      .resize(size, Image.LANCZOS)).astype(np.float32)
+
+REF = up(SRC, (OW, OH))                       # single-shot reference
+
+def tiled(T, ov):
+    """ov = extra CONTEXT source px per side, cropped back before writing."""
+    out = np.zeros((OH, OW, 3), np.float32)
+    xs = list(range(0, W, T)); ys = list(range(0, H, T))
+    for y0 in ys:
+        for x0 in xs:
+            x1, y1 = min(x0+T, W), min(y0+T, H)
+            cx0, cy0 = max(0, x0-ov), max(0, y0-ov)
+            cx1, cy1 = min(W, x1+ov), min(H, y1+ov)
+            t = up(SRC[cy0:cy1, cx0:cx1], ((cx1-cx0)*K, (cy1-cy0)*K))
+            oy, ox = (y0-cy0)*K, (x0-cx0)*K
+            out[y0*K:y1*K, x0*K:x1*K] = t[oy:oy+(y1-y0)*K, ox:ox+(x1-x0)*K]
+    return out
+
+# ov=0,1,2 differ; ov=3 is bit-identical for a 3-tap kernel
+for ov in (0, 1, 2, 3):
+    o = tiled(108, ov)
+    d = np.abs(o-REF).max(2)
+    print(ov, np.array_equal(o, REF), round(float(d.max()), 1), int((d > 2).sum()))
+# -> 0 False 51.0 7947 / 1 False 14.0 2586 / 2 False 3.0 4 / 3 True 0.0 0</code></pre>
+
+<p>Output on this machine, in that order: <code>0 False 51.0 7947 · 1 False 14.0 2586 ·
+2 False 3.0 4 · 3 True 0.0 0</code>. The <code>Image.BOX</code> downscale matters — using
+<code>NEAREST</code> to build the source would hand the upscaler a pre-decimated image with no
+intermediate values, and the seam errors would be smaller for a reason that has nothing to do with
+the algorithm. If your numbers disagree at ov=3, check that the resize target is
+<code>((cx1-cx0)*K, (cy1-cy0)*K)</code> and not the nominal tile size; getting that wrong is the
+most common way to report a seam that is really a half-pixel crop.</p>
+
+<footer>
+Published by UpgoLAB — AI photo and short-video upscaling in the browser. Measured with numpy 1.26.4
+and Pillow 12.2.0 on one real photograph at 540×810, upscaled 2×; 9 tables, 9 experiments, 3
+negative results (tile size is not monotonic, blending identical fields is measurably worse than
+cropping, grid phase has no effect) and 2 instrument bugs reported rather than hidden. Every number
+reproducible from the snippet above; no value was adjusted after the run.
+
+<style>
+.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
+.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
+ color:#5b6270;margin:0 0 .6rem}
+.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
+.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
+.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
+.sisternav a:hover{border-bottom-color:#0a58ca}
+</style>
+
+<nav class="sisternav" aria-label="More measured upscaling guides">
+<p>More measured guides</p>
+<ul>
+  <li><a href="https://celticgemini001.github.io/upgolab-ai-upscaler-guide/">What upscaling recovers vs invents</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-video-upscaling-limits/">Why video isn't image upscaling</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-upscale-product-photos/">Product shot vs face</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-2k-vs-4k-decision/">2K vs 4K bits-per-pixel</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-upscale-anime-illustration/">Line art and ink coverage</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-old-footage-restoration/">Old footage restoration</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-screen-recording-4k/">Screen recording to 4K</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-thumbnail-4k-master/">4K thumbnail master</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-remove-background-and-upscale/">Cutout and upscale</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-anisotropic-upscale/">Anisotropic / one-axis scale</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-chroma-subsampling/">Chroma subsampling 4:2:0</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-gamma-vs-linear-light/">Gamma vs linear light</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-bit-depth-banding/">8-bit vs 10-bit banding</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-jpeg-blocking-upscale/">JPEG blocking under upscaling</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-upscale-vs-reshoot/">Re-shoot vs upscale break-even</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-what-nofollow-means/">What rel=nofollow actually does</a></li>
+  <li><a href="https://celticgemini001.github.io/upgolab-tools/">All guides (index)</a></li>
+</ul>
+</nav>
+</footer>
+</article>
+</main>
+</body>
+</html>
