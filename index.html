@@ -42,6 +42,15 @@ pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1r
 code{font-size:.9em}
 footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
 </style>
+<style>
+.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
+.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
+ color:#5b6270;margin:0 0 .6rem}
+.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
+.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
+.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
+.sisternav a:hover{border-bottom-color:#0a58ca}
+</style>
 </head>
 <body>
 <main>
@@ -65,14 +74,14 @@ from a screenshot · every number reproducible from the snippet at the end</p>
 
 <h2>The experiment that decides everything: context, not size</h2>
 
-<p>A separable Lanczos-3 resampler reaches three pixels in each direction. If a tile is cut exactly
+<p>A separable Lanczos-3 resampler reaches three pixels in each direction. If a <a href="https://celticgemini001.github.io/upgolab-jpeg-blocking-upscale/">tile</a> is cut exactly
 at the boundary it will be asked to produce output pixels whose interpolation window extends past
 its own edge, and the implementation has to invent something — edge replication, reflection, or
 zero padding. Whichever it picks, it is not the value the full-frame resampler would have used,
 because that value lived in the neighbouring tile.</p>
 
 <p>So the question "how much overlap do I need?" has a sharp answer rather than a heuristic answer.
-I gave each tile <code>ov</code> extra source pixels of context on every side, resampled the padded
+I gave each tile <code>ov</code> extra source pixels of <a href="https://celticgemini001.github.io/upgolab-anisotropic-upscale/">context</a> on every side, resampled the padded
 tile, then <strong>cropped the context back off</strong> before writing — no blending, no feathering,
 exact coverage. Increasing <code>ov</code> from zero upward:</p>
 
@@ -563,22 +572,14 @@ the algorithm. If your numbers disagree at ov=3, check that the resize target is
 <code>((cx1-cx0)*K, (cy1-cy0)*K)</code> and not the nominal tile size; getting that wrong is the
 most common way to report a seam that is really a half-pixel crop.</p>
 
+
+</article>
 <footer>
 Published by UpgoLAB — AI photo and short-video upscaling in the browser. Measured with numpy 1.26.4
 and Pillow 12.2.0 on one real photograph at 540×810, upscaled 2×; 9 tables, 9 experiments, 3
 negative results (tile size is not monotonic, blending identical fields is measurably worse than
 cropping, grid phase has no effect) and 2 instrument bugs reported rather than hidden. Every number
 reproducible from the snippet above; no value was adjusted after the run.
-
-<style>
-.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
-.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
- color:#5b6270;margin:0 0 .6rem}
-.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
-.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
-.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
-.sisternav a:hover{border-bottom-color:#0a58ca}
-</style>
 
 <nav class="sisternav" aria-label="More measured upscaling guides">
 <p>More measured guides</p>
@@ -611,7 +612,6 @@ reproducible from the snippet above; no value was adjusted after the run.
 </ul>
 </nav>
 </footer>
-</article>
 </main>
 </body>
 </html>
