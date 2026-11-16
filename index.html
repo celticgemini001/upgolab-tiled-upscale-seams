@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tiled Upscaling Seams: How Much Context a Tile Actually Needs</title>
-<meta name="description" content="Zero-context tiling put 0.45% of pixels more than 2 levels off, 68% of them within 2 px of a tile boundary. Three pixels of context made every tile size bit-identical to the full frame; per-tile auto-levels cost 34 dB.">
+<meta name="description" content="Zero-context tiling put 0.45% of pixels more than 2 levels off, 68% of them within 2 px of a tile boundary. Three pixels of context made every tile size bit-identical at 2x; at 2.7x the same tiler is wrong at all six tile sizes and the error has no seam in it.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-tiled-upscale-seams/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Tiled Upscaling Seams: How Much Context a Tile Actually Needs">
@@ -54,7 +54,8 @@ inference batch. I tiled a real photograph deliberately, at six tile sizes, and 
 difference against a single-shot upscale of the whole frame. The answer is smaller than the
 folklore: a tile needs as much <em>context</em> as the resampler has support, and three source
 pixels was enough to make 54, 64, 108, 180, 256 and 270-pixel tiles all <strong>bit-identical</strong>
-to the full-frame result. What does produce visible seams is not tiling at all — it is any
+to the full-frame result. That holds at a whole-number scale factor. At 2.7× the same tiler is wrong
+at every tile size, and the wrongness has no seam in it — which is the second half of this page. What does produce visible seams is not tiling at all — it is any
 per-tile adaptive step, and I have the numbers for how badly.</p>
 
 <p class="meta">Measured with numpy 1.26.4 and Pillow 12.2.0 · source is one real photograph downscaled
@@ -316,11 +317,199 @@ result. Thirty-two pixels of context, the sort of number that gets recommended a
 factor of six in cost terms, and it is the wrong one in the same direction every time: people
 overlap by feel, and feel is calibrated to hiding a seam rather than to satisfying a kernel.</p>
 
+<h2>When the scale factor is not a whole number</h2>
+
+<p>Everything above was measured at exactly 2×, and that turns out to matter more than the tile
+size, the padding or the resampler. At K = 2 every tile boundary lands on an integer output pixel,
+so resizing a pad of source to <code>round(width*K)</code> is arithmetically the same operation as
+resizing the whole frame. The experiment above therefore proves that context is the only requirement
+<em>under that condition</em>. Run the identical tiler at a scale factor where
+<code>padded_width × K</code> is not an integer and the guarantee is gone — without producing
+anything a seam check looks for.</p>
+
+<p>The case is not exotic. A pipeline that scales "to a target size" computes K = target/source,
+which for 1620 out of 600 is 2.7, not 2. Browser canvas scaling, <code>--scale</code> flags that
+take a float, and any "fit in this box" path all land here. I ran five scale factors × six tile sizes
+with six source pixels of padding, same photograph, same resampler, against the whole frame in one
+call:</p>
+
+<table>
+<thead><tr><th>K</th><th>q in K = p/q, lowest terms</th><th>tile sizes broken</th><th>PSNR (dB)</th><th>worst max err</th><th>worst %px &gt;1 level</th></tr></thead>
+<tbody>
+<tr><td class="num">1.5</td><td class="num">2</td><td class="num">1 of 6</td><td class="num">27.24 — exact</td><td class="num">255</td><td class="num">38.02</td></tr>
+<tr><td class="num">2.0</td><td class="num">1</td><td class="num">0 of 6</td><td class="num">exact at all six</td><td class="num">0</td><td class="num">0.00</td></tr>
+<tr><td class="num">2.5</td><td class="num">2</td><td class="num">1 of 6</td><td class="num">35.55 — exact</td><td class="num">232</td><td class="num">26.14</td></tr>
+<tr><td class="num">2.7</td><td class="num">10</td><td class="num">6 of 6</td><td class="num">37.73 — 49.45</td><td class="num">90</td><td class="num">22.63</td></tr>
+<tr><td class="num">3.3</td><td class="num">10</td><td class="num">6 of 6</td><td class="num">32.16 — 50.90</td><td class="num">255</td><td class="num">19.42</td></tr>
+</tbody>
+</table>
+
+<p>"exact" means the tiled output was bit-identical to the whole-frame result, max abs difference
+0, so no PSNR is quoted for those rows. Tile sizes 64, 100, 107, 108, 128, 180 source pixels; K = 2
+is exact at every one — that is what
+the rest of this page measured. K = 2.7 and K = 3.3 are wrong at every one, including 64 and 180,
+so this is not a tile-size effect. The parameter that decides it is whether
+<code>padded_width × K</code> is an integer for <em>every</em> tile in the grid, the clipped ones on
+the right and bottom edges included, because those are padded on one side only and get a different
+width from the interior tiles.</p>
+
+<div class="callout warn">
+<p><strong>The negative result, stated plainly:</strong> adding context to a tiling that was already
+exact can break it. At K = 2.5 on 108-pixel tiles, zero padding measures 55.00 dB with a maximum error
+of 62 levels; one pixel of padding measures <strong>35.25 dB with a maximum error of 102</strong>;
+two gives 75.48 dB and a maximum of 3; three gives 33.74 dB and a maximum of 232; four is
+bit-identical again. The sweep alternates, and it alternates because the padded width alternates
+between a multiple and a non-multiple of 2 — the denominator of 5/2.</p>
+</div>
+
+<table>
+<thead><tr><th>context</th><th>padded tile widths</th><th>all widths × 2.5 integral</th><th>PSNR (dB)</th><th>max err</th></tr></thead>
+<tbody>
+<tr><td class="num">0 px</td><td class="num">108</td><td>yes</td><td class="num">55.00</td><td class="num">62</td></tr>
+<tr><td class="num">1 px</td><td class="num">109, 110</td><td><strong>no</strong> — 109</td><td class="num">35.25</td><td class="num">102</td></tr>
+<tr><td class="num">2 px</td><td class="num">110, 112</td><td>yes</td><td class="num">75.48</td><td class="num">3</td></tr>
+<tr><td class="num">3 px</td><td class="num">111, 114</td><td><strong>no</strong> — 111</td><td class="num">33.74</td><td class="num">232</td></tr>
+<tr><td class="num">4 px</td><td class="num">112, 116</td><td>yes</td><td>exact</td><td class="num">0</td></tr>
+<tr><td class="num">6 px</td><td class="num">114, 120</td><td>yes</td><td>exact</td><td class="num">0</td></tr>
+<tr><td class="num">8 px</td><td class="num">116, 124</td><td>yes</td><td>exact</td><td class="num">0</td></tr>
+</tbody>
+</table>
+
+<p>Two conditions predicted all 66 measured rows in this article — the 30 in the grid above plus 36
+in the padding sweep — with no exceptions: the padded width times K must be an integer for every
+tile, and the context must be at least the kernel radius. When both held the output was bit-identical
+in 26 of 26 cases. When either failed it was never bit-identical (36 of 36 for the scale condition,
+4 of 4 for the support condition). Neither condition is what the usual advice says, and the failure
+of the first is silent.</p>
+
+<h3>Two ways it goes wrong, and only one of them has a seam</h3>
+
+<p>Divide the error map into a 2-pixel band around each tile boundary and everything else, and count
+what fraction of the total error falls in the band:</p>
+
+<table>
+<thead><tr><th>K / tile</th><th>mean abs err</th><th>max err</th><th>%px &gt;1</th><th>error in seam band</th><th>band is % of frame</th><th>seam ÷ interior</th></tr></thead>
+<tbody>
+<tr><td class="num">2.5 / 107</td><td class="num">1.667</td><td class="num">232</td><td class="num">26.14</td><td class="num">3.0%</td><td class="num">2.84%</td><td class="num">1.06</td></tr>
+<tr><td class="num">2.7 / 100</td><td class="num">0.564</td><td class="num">18</td><td class="num">7.76</td><td class="num">2.9%</td><td class="num">2.81%</td><td class="num">1.03</td></tr>
+<tr><td class="num">3.3 / 108</td><td class="num">1.168</td><td class="num">255</td><td class="num">15.08</td><td class="num">21.9%</td><td class="num">1.94%</td><td class="num">14.24</td></tr>
+<tr><td class="num">1.5 / 107</td><td class="num">3.238</td><td class="num">255</td><td class="num">38.02</td><td class="num">21.2%</td><td class="num">4.72%</td><td class="num">5.43</td></tr>
+</tbody>
+</table>
+
+<p>In the first two rows the error is spread evenly: the band holds 3.0% of it and occupies 2.84% of
+the frame, a ratio of 1.06. A detector that asks "is there a step at the boundary?" answers no, and
+answers correctly, because there is no step — the whole image is very slightly the wrong size. At
+K = 2.5 on 107-pixel tiles that costs 26% of pixels more than one level and a maximum single-channel
+difference of 232 levels, with nothing localised to see. In the bottom two rows the same class of
+error concentrates into lines instead, the boundary step is 45 levels, and the artifact is obvious.
+One bug, two presentations, and the presentation that survives review is the one where no local
+inspection shows anything.</p>
+
+<p>Where a boundary does become a line, it is a single column, not a ramp. At K = 3.3 the boundary
+columns are 356, 713, 1069 and 1426 while the true positions are 356.4, 712.8, 1069.2 and 1425.6.
+Column-by-column absolute error, five either side of the boundary, for the two that fail:</p>
+
+<table>
+<thead><tr><th>boundary</th><th>−5</th><th>−4</th><th>−3</th><th>−2</th><th>−1</th><th>0</th><th>+1</th><th>+2</th><th>+3</th><th>+4</th><th>+5</th></tr></thead>
+<tbody>
+<tr><td class="num">713</td><td class="num">1.14</td><td class="num">1.07</td><td class="num">1.01</td><td class="num">1.30</td><td class="num"><strong>71.12</strong></td><td class="num">0.41</td><td class="num">0.41</td><td class="num">0.42</td><td class="num">0.42</td><td class="num">0.43</td><td class="num">0.46</td></tr>
+<tr><td class="num">1426</td><td class="num">1.13</td><td class="num">1.15</td><td class="num">1.03</td><td class="num">1.14</td><td class="num"><strong>130.13</strong></td><td class="num">0.86</td><td class="num">0.84</td><td class="num">0.93</td><td class="num">0.93</td><td class="num">0.81</td><td class="num">0.84</td></tr>
+</tbody>
+</table>
+
+<p>One column absorbs everything while its neighbour is clean. That is what the geometry predicts:
+inside a tile the sample positions drift linearly, because the tile's own scale is
+<code>round(cw*K)/cw</code> rather than K, so the drift is largest at the tile's far edge; the next
+tile then restarts at its own offset. At the boundary the two tiles disagree about phase by the full
+accumulated drift of the left tile, and that disagreement lands in the last column it writes. The
+size of the nominal subpixel offset does not predict the damage. At K = 1.5 on 107-pixel tiles the
+two boundaries sitting at <em>zero</em> offset jump 71.0 and 4.2 levels, while the three at ±0.5 jump
+4.9, 9.1 and 123.7 — the ranking is uncorrelated with the offset, because what matters is the drift
+the tile accumulated internally, not the phase it started at.</p>
+
+<h3>Padding and larger tiles are not the fix</h3>
+
+<p>The context sweep that is exact at K = 2 does nothing here. Padding from 0 to 16 source pixels at
+K = 2.5 on 107-pixel tiles gives 34.04, 35.87, 35.28, 30.71, 34.09, 35.55, 34.25, 34.25, 34.25 dB —
+flat, non-monotonic, and the maximum error never leaves 232 levels. Enlarging the tiles does not
+rescue it either: at K = 2.5 five of the six tile sizes are exact and the 107-pixel grid is not,
+because only there is the padded width odd — 107 + 12 = 119, against 108 + 12 = 120 for its
+neighbour. There is no safe tile size and no safe padding amount for a given K; there is only the
+parity of the padded width.</p>
+
+<p>What removing the per-tile assumption costs, measured at K = 2.7 against the whole-frame result
+(work ratio = padded source area ÷ frame area; every row below was bit-identical):</p>
+
+<table>
+<thead><tr><th>tile</th><th>tiles</th><th>work ratio, 0 context</th><th>work ratio, 3 px context</th></tr></thead>
+<tbody>
+<tr><td class="num">64</td><td class="num">117</td><td class="num">1.186</td><td class="num">1.387</td></tr>
+<tr><td class="num">100</td><td class="num">54</td><td class="num">1.118</td><td class="num">1.243</td></tr>
+<tr><td class="num">128</td><td class="num">35</td><td class="num">1.091</td><td class="num">1.186</td></tr>
+<tr><td class="num">180</td><td class="num">15</td><td class="num">1.053</td><td class="num">1.106</td></tr>
+<tr><td class="num">270</td><td class="num">6</td><td class="num">1.026</td><td class="num">1.053</td></tr>
+</tbody>
+</table>
+
+<p>These are the same numbers as the integer-K table earlier, which is the point: the cost of doing it
+correctly is the kernel radius of overlap and it does not depend on whether K is whole. What changes
+is that the resampler must be handed global output coordinates instead of a local resize command.
+Given that, all 60 combinations of five scale factors × six tile sizes × two context values were
+bit-identical, zero extra context included, because the kernel already reaches three pixels on its
+own.</p>
+
+<p>Compression does not hide any of it. Encoding the broken K = 2.5 / 107 output at JPEG q90 costs
+47.97 dB against the reference while the tiling error itself is 35.55 dB — the defect sits 12.4 dB
+above the codec floor and the maximum difference after encoding is still 234 levels. A quality
+setting is not a mitigation.</p>
+
+<h3>Reproducing the fractional case</h3>
+
+<pre><code>import numpy as np
+
+def lanczos(x, a=3.0):
+    x = np.asarray(x, dtype=np.float64); xz = np.where(x == 0, 1.0, x)
+    o = np.sin(np.pi*x)/(np.pi*xz) * np.sin(np.pi*x/a)/(np.pi*xz/a)
+    return np.where(np.abs(x) &lt; a, o, 0.0)
+
+def axis_matrix(n_src, n_out, K):
+    """weights mapping output pixel g to source coordinate (g+0.5)/K - 0.5"""
+    M = np.zeros((n_out, n_src), np.float32); lo = np.zeros(n_out, int); hi = lo.copy()
+    for g in range(n_out):
+        s = (g + 0.5)/K - 0.5
+        idx = np.arange(int(np.floor(s)) - 2, int(np.floor(s)) + 4)
+        np.add.at(M[g], np.clip(idx, 0, n_src-1), lanczos(s - idx).astype(np.float32))
+        lo[g], hi[g] = idx.min(), idx.max()
+    return M / M.sum(1, keepdims=True), lo, hi
+
+K = 2.7                                    # 1620 / 600: not an integer
+H, W = src.shape[:2]
+Wy, _, _ = axis_matrix(H, round(H*K), K)
+Wx, _, _ = axis_matrix(W, round(W*K), K)
+
+# per tile: slice the same matrices. No resize call, so no local scale to get wrong.
+gx0, gx1 = round(x0*K), round(x1*K)
+cx0 = max(0, xlo[gx0:gx1].min() - 3)
+cx1 = min(W, xhi[gx0:gx1].max() + 1 + 3)
+tile = np.einsum('pj,ojc-&gt;opc', Wx[gx0:gx1, cx0:cx1],
+                 np.einsum('oi,ijc-&gt;ojc', Wy[gy0:gy1, cy0:cy1], src[cy0:cy1, cx0:cx1]))</code></pre>
+
+<p>The whole difference from the version at the top of this page is that <code>xlo</code> and
+<code>xhi</code> come from the kernel's support at global coordinates, so a tile is told which source
+pixels it needs rather than handed a crop and a size. If you are stuck with a library that only
+offers "resize this array to this size", the workable compromise is to force every padded width to a
+multiple of the denominator of K in lowest terms — 5/2 wants even widths, 27/10 wants multiples of
+ten — and then to verify with <code>max(abs(tiled - full))</code> rather than by looking at the seam,
+because as the table above shows, looking at the seam will tell you it is fine.</p>
+
 <div class="callout">
 <p><strong>The rule, in one line:</strong> context = kernel radius in source pixels, cropped back
-and never blended, and no per-tile adaptive state. Everything else in this measurement follows from
-those three clauses. The tiles are innocent; the seam is made by the padding, by the blend, or by
-the per-tile decision.</p>
+and never blended, no per-tile adaptive state, and the resampler fed global output coordinates so
+that every tile uses the same mapping — then verify bit-exactness against the whole-frame result,
+never against the seam. Everything else in this measurement follows from those four clauses. The
+tiles are innocent; the seam is made by the padding, by the blend, by the per-tile decision, or by a
+scale factor whose product with the padded tile width is not an integer.</p>
 </div>
 
 <p>If your pipeline tiles because the model or the browser tab cannot hold the frame, the tiling
